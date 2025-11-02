@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <fstream>
@@ -11,21 +12,21 @@ using namespace std;
 #define NUM_PASSWORDS 14344391 /* the number of lines in the rockyou dataset */
 #define TERMINAL_WIDTH 80      /* used for progress bar, assume default width */
 
-unordered_set<string> tried_passwords; /* used for memoization */
+unordered_set<string> tried_pwds; /* used for memoization */
 
 /*
- * tries to find the correct password by pre/appending numbers to the base 
+ * tries to find the correct pwd by pre/appending numbers to the base 
  * password (start)
  * return values:
- *  - 0: password was NOT found
- *  - 1: password found
+ *  - 0: pwd was NOT found
+ *  - 1: pwd found
  */
 int
-find_password_add_int(const string start, const int max_len, const string password)
+find_pwd_add_int(const string start, const int max_len, const string pwd)
 {
     size_t len = start.length();
 
-    if (start == password) {
+    if (start == pwd) {
         cout << endl
              << "Your password is: " << start << endl;
         return 1;
@@ -44,20 +45,20 @@ find_password_add_int(const string start, const int max_len, const string passwo
             append += to_string(j);
 
             /* memoize! */
-            if (tried_passwords.find(prepend) != tried_passwords.end()) {
+            if (tried_pwds.find(prepend) != tried_pwds.end()) {
                 return 0;
             } else {
-                tried_passwords.insert(prepend);
+                tried_pwds.insert(prepend);
             }
 
-            if (tried_passwords.find(append) != tried_passwords.end()) {
+            if (tried_pwds.find(append) != tried_pwds.end()) {
                 return 0;
             } else {
-                tried_passwords.insert(append);
+                tried_pwds.insert(append);
             }
 
-            if (find_password_add_int(append, max_len, password)
-                || find_password_add_int(prepend, max_len, password)) {
+            if (find_pwd_add_int(append, max_len, pwd)
+                || find_pwd_add_int(prepend, max_len, pwd)) {
                     return 1;
             }
         }
@@ -67,39 +68,125 @@ find_password_add_int(const string start, const int max_len, const string passwo
 }
 
 /*
- * tries to find the correct password by reversing a common password.
+ * tries to find the correct pwd by deleting characters from the base
+ * password (start) and stops when the string is empty
  * return values:
- *  - 0: password was NOT found
- *  - 1: password found
+ *  - 0: pwd was NOT found
+ *  - 1: pwd found
  */
 int
-find_password_reverse(const string start, const string password)
+find_pwd_remove(const string start, const string pwd)
+{
+    size_t len = start.length();
+
+    if (start == pwd) {
+        cout << endl << "Your password is: " << start << endl;
+        return 1;
+    }
+
+    if (start == "") {
+        return 0;
+    }
+
+    for (size_t i = 0; i < len; i++) {
+        string new_pwd = start;
+        new_pwd.erase(i, 1);
+
+        if (find_pwd_remove(new_pwd, pwd)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/*
+ * tries to find the correct pwd by changing the casing on the base
+ * password (start) and stops
+ * return values:
+ *  - 0: pwd was NOT found
+ *  - 1: pwd found
+ */
+int
+find_pwd_casing(const string start, const string end, const string pwd)
+{
+    size_t len = start.length();
+
+    if (start == pwd) {
+        cout << endl << "Your password is: " << start << endl;
+        return 1;
+    }
+
+    if (start == end) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < len; i++) {
+        char curr = start[i];
+        string new_pwd = start.substr(0, i);
+
+        if (!isalpha(curr)) {
+            continue; /* not a letter, just ignore */
+        }
+
+        if (isupper(curr)) {
+            new_pwd += tolower(curr);
+        } else {
+            new_pwd += toupper(curr);
+        }
+
+        if (i < len - 1) {
+            new_pwd += start.substr(i + 1, len - i - 1);
+        }
+
+        /* memoize! */
+        if (tried_pwds.find(new_pwd) != tried_pwds.end()) {
+            return 0;
+        } else {
+            tried_pwds.insert(new_pwd);
+        }
+        
+        if (find_pwd_casing(new_pwd, end, pwd)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/*
+ * tries to find the correct pwd by reversing a common pwd.
+ * return values:
+ *  - 0: pwd was NOT found
+ *  - 1: pwd found
+ */
+int
+find_pwd_reverse(const string start, const string pwd)
 {
     string reversed = string(start.rbegin(), start.rend());
 
-    if (reversed == password) {
+    if (reversed == pwd) {
         return 1;
     }
     return 0;
 }
 
 /*
- * tries to find the correct password by repeating a common password twice.
+ * tries to find the correct pwd by repeating a common pwd twice.
  * return values:
- *  - 0: password was NOT found
- *  - 1: password found
+ *  - 0: pwd was NOT found
+ *  - 1: pwd found
  */
 int
-find_password_repeat(const string password, const int max_len)
+find_pwd_repeat(const string start, const int max_len, const string pwd)
 {
-    string repeated = password + password;
-    size_t len = repeated.length();
-
-    if ((int)len > max_len) {
+    size_t len = start.length();
+    if ((int)len * 2 > max_len) {
         return 0;
     }
 
-    if (repeated == password) {
+    string repeated = pwd + pwd;
+    if (repeated == pwd) {
         return 1;
     }
     return 0;
@@ -109,24 +196,20 @@ find_password_repeat(const string password, const int max_len)
  * applying brute force variations such as the following:
  *  rules to apply for finding variations (each node can be assigned a rule):
  *  1. adding numbers
- *     Example: password -> 1password -> password1 -> password2 -> ...
+ *     Example: pwd -> 1pwd -> pwd1 -> pwd2 -> ...
  *  2. reverse spelling
- *      Example: password -> drowssap
- *  3. repeating password twice
- *      Example: password -> passwordpassword
+ *      Example: pwd -> dwp
+ *  3. repeating pwd twice
+ *      Example: pwd -> pwdpwd
  *  4. changing casing
- *      Example: password -> Password -> PASSWORD -> paSSword -> ...
- *  5. leet spellings
- *      Example: password -> p4ssw0rd -> p@ssword -> ...
- *  7. deleting characters
+ *      Example: pwd -> Pwd -> PWD -> pWD -> ...
+ *  5. deleting characters
  *      Example: password -> passwrd -> assword -> ...
- *  8. adding all prefixes and suffixes
- *      Example: password -> apassword -> passwordx -> xpasswordy -> ...
  */
 int
-find_password(const string password, const int max_len)
+find_pwd(const string pwd, const int max_len)
 {
-    ifstream common_password(DICTIONARY);
+    ifstream common_pwd(DICTIONARY);
     string curr_pass;
     int counter = 0;
     /* number of passwords needed to print each '#' to keep track of progress */
@@ -134,8 +217,8 @@ find_password(const string password, const int max_len)
 
     cout << "Looking up password... " << endl;
 
-    while (common_password >> curr_pass) {
-        if (curr_pass == password) {
+    while (common_pwd >> curr_pass) {
+        if (curr_pass == pwd) {
             cout << endl
                  << "Your password is: " << curr_pass << endl;
             return 1;
@@ -153,29 +236,56 @@ find_password(const string password, const int max_len)
     cout << ">" << endl;
 
     /* BRUTE FORCE attack starts here */
-    common_password.clear();
-    common_password.seekg(0, ios::beg);
+    common_pwd.clear();
+    common_pwd.seekg(0, ios::beg);
     cout << "Your password is not that common..." << endl;
     cout << "Starting a brute force attack..." << endl;
     counter = 0;
 
-    while (common_password >> curr_pass) {
+    unordered_set<string> lowered_pwds; /* used to void repeating casing */
+
+    while (common_pwd >> curr_pass) {
         /* each if statement will be assigned to a node */
-        if (find_password_add_int(curr_pass, max_len, password)) {
-            cout << endl
-                 << "Found the password by adding numbers!" << endl;
+        if (find_pwd_add_int(curr_pass, max_len, pwd)) {
+            cout << endl << "Found the password by adding numbers to '" 
+                 << curr_pass << "'." << endl;
             return 1;
         }
 
-        if (find_password_reverse(curr_pass, password)) {
-            cout << endl
-                 << "Found the password by reversing a common password!" << endl;
+        tried_pwds.clear(); /* reset after every entry */
+
+        if (find_pwd_reverse(curr_pass, pwd)) {
+            cout << endl << "Found the password by reversing '"
+                 << curr_pass << "'." << endl;
             return 1;
         }
 
-        if (find_password_repeat(curr_pass, max_len)) {
-            cout << endl
-                 << "Found the password by reversing a common password!" << endl;
+        if (find_pwd_repeat(curr_pass, max_len, pwd)) {
+            cout << endl << "Found the password by repeating '"
+                << curr_pass << "'." << endl;
+            return 1;
+        }
+
+        string lower = curr_pass;
+        transform(curr_pass.begin(), curr_pass.end(), lower.begin(), ::tolower);
+        string upper = curr_pass;
+        transform(curr_pass.begin(), curr_pass.end(), upper.begin(), ::toupper);
+        
+        if (lowered_pwds.find(lower) == lowered_pwds.end()) {
+            if (find_pwd_casing(lower, upper, pwd)) {
+                cout << endl << "Found the password by changing casing on '"
+                    << curr_pass << "'." << endl;
+                return 1;
+            }
+            lowered_pwds.insert(lower);
+        }
+
+
+        tried_pwds.clear(); /* reset after every entry */
+
+        if (find_pwd_remove(curr_pass, pwd)) {
+            cout << endl << "Found the password by removing characters from '"
+                << curr_pass << "'." << endl;
             return 1;
         }
 
@@ -196,7 +306,7 @@ main(int argc, char *argv[])
         return 1;
     }
 
-    string password = argv[1];
+    string pwd = argv[1];
     int max_len = 128;
     if (argc == 3) {
         istringstream iss;
@@ -213,7 +323,7 @@ main(int argc, char *argv[])
     }
 
     auto start = chrono::high_resolution_clock::now();
-    if (!find_password(password, max_len)) {
+    if (!find_pwd(pwd, max_len)) {
         cout << "Nice password, couldn't crack it!" << endl;
     }
 
