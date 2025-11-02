@@ -2,7 +2,6 @@
 #include <chrono>
 #include <iostream>
 #include <fstream>
-#include <mpi.h>
 #include <sstream>
 #include <string.h>
 #include <unordered_set>
@@ -193,9 +192,8 @@ find_pwd_repeat(const string start, const int max_len, const string pwd)
     return 0;
 }
 
-
-/* tries to find the correct password by applying brute force variations 
- * such as the following:
+/* tries to find the correct password by looking it up in the dictionary and then
+ * applying brute force variations such as the following:
  *  rules to apply for finding variations (each node can be assigned a rule):
  *  1. adding numbers
  *     Example: pwd -> 1pwd -> pwd1 -> pwd2 -> ...
@@ -208,67 +206,7 @@ find_pwd_repeat(const string start, const int max_len, const string pwd)
  *  5. deleting characters
  *      Example: password -> passwrd -> assword -> ...
  */
-void
-brute_force(const string pwd, const int max_len, int rank) {
-    cout << "Rank " << rank << ": starting a brute force attack..." << endl;
-
-    unordered_set<string> lowered_pwds; /* used to void repeating casing */
-    ifstream common_pwd(DICTIONARY);
-    string curr_pass;
-
-    while (common_pwd >> curr_pass) {
-        if (rank == 1) {
-            if (find_pwd_add_int(curr_pass, max_len, pwd)) {
-                cout << endl
-                    << "Rank 1 found the password by adding numbers to '"
-                    << curr_pass << "'." << endl;
-                MPI_Abort(MPI_COMM_WORLD, 0);
-            }
-            tried_pwds.clear(); /* reset after every entry */
-        } else if (rank == 2) {
-            if (find_pwd_reverse(curr_pass, pwd)) {
-                cout << endl
-                    << "Rank 2 found the password by reversing '"
-                    << curr_pass << "'." << endl;
-                MPI_Abort(MPI_COMM_WORLD, 0);
-            }
-        } else if (rank == 3) {
-            if (find_pwd_repeat(curr_pass, max_len, pwd)) {
-                cout << endl
-                    << "Rank 3 found the password by repeating '"
-                    << curr_pass << "'." << endl;
-                MPI_Abort(MPI_COMM_WORLD, 0);
-            }
-        } else if (rank == 4) {
-            string lower = curr_pass;
-            transform(curr_pass.begin(), curr_pass.end(), lower.begin(), ::tolower);
-            string upper = curr_pass;
-            transform(curr_pass.begin(), curr_pass.end(), upper.begin(), ::toupper);
-            
-            if (lowered_pwds.find(lower) == lowered_pwds.end()) {
-                if (find_pwd_casing(lower, upper, pwd)) {
-                    cout << endl 
-                        << "Rank 4 found the password by changing casing on '"
-                        << curr_pass << "'." << endl;
-                    MPI_Abort(MPI_COMM_WORLD, 0);
-                }
-                lowered_pwds.insert(lower);
-            }
-
-            tried_pwds.clear(); /* reset after every entry */
-        } else if (find_pwd_remove(curr_pass, pwd)) {
-            cout << endl
-                << "Rank 5 found the password by removing characters from '"
-                << curr_pass << "'." << endl;
-            MPI_Abort(MPI_COMM_WORLD, 0);
-        }
-    }
-}
-
-/*
- * tries to find the right password by looking it up in the rockyou dictionary
- */
-void
+int
 find_pwd(const string pwd, const int max_len)
 {
     ifstream common_pwd(DICTIONARY);
@@ -277,12 +215,13 @@ find_pwd(const string pwd, const int max_len)
     /* number of passwords needed to print each '#' to keep track of progress */
     int progress = NUM_PASSWORDS / TERMINAL_WIDTH;
 
-    cout << "Rank 0 is looking up the password in the dictionary... " << endl;
+    cout << "Looking up password... " << endl;
 
     while (common_pwd >> curr_pass) {
         if (curr_pass == pwd) {
-            cout << endl << "Your password is: " << curr_pass << endl;
-            MPI_Abort(MPI_COMM_WORLD, 0);
+            cout << endl
+                 << "Your password is: " << curr_pass << endl;
+            return 1;
         }
 
         if (++counter % progress == 0) {
@@ -295,19 +234,73 @@ find_pwd(const string pwd, const int max_len)
     }
 
     cout << ">" << endl;
+
+    /* BRUTE FORCE attack starts here */
+    common_pwd.clear();
+    common_pwd.seekg(0, ios::beg);
+    cout << "Your password is not that common..." << endl;
+    cout << "Starting a brute force attack..." << endl;
+    counter = 0;
+
+    unordered_set<string> lowered_pwds; /* used to void repeating casing */
+
+    while (common_pwd >> curr_pass) {
+        /* each if statement will be assigned to a node */
+        if (find_pwd_add_int(curr_pass, max_len, pwd)) {
+            cout << endl << "Found the password by adding numbers to '" 
+                 << curr_pass << "'." << endl;
+            return 1;
+        }
+
+        tried_pwds.clear(); /* reset after every entry */
+
+        if (find_pwd_reverse(curr_pass, pwd)) {
+            cout << endl << "Found the password by reversing '"
+                 << curr_pass << "'." << endl;
+            return 1;
+        }
+
+        if (find_pwd_repeat(curr_pass, max_len, pwd)) {
+            cout << endl << "Found the password by repeating '"
+                << curr_pass << "'." << endl;
+            return 1;
+        }
+
+        string lower = curr_pass;
+        transform(curr_pass.begin(), curr_pass.end(), lower.begin(), ::tolower);
+        string upper = curr_pass;
+        transform(curr_pass.begin(), curr_pass.end(), upper.begin(), ::toupper);
+        
+        if (lowered_pwds.find(lower) == lowered_pwds.end()) {
+            if (find_pwd_casing(lower, upper, pwd)) {
+                cout << endl << "Found the password by changing casing on '"
+                    << curr_pass << "'." << endl;
+                return 1;
+            }
+            lowered_pwds.insert(lower);
+        }
+
+
+        tried_pwds.clear(); /* reset after every entry */
+
+        if (find_pwd_remove(curr_pass, pwd)) {
+            cout << endl << "Found the password by removing characters from '"
+                << curr_pass << "'." << endl;
+            return 1;
+        }
+
+        if (++counter % progress == 0) {
+            cout << unitbuf;
+            cout << "#";
+        }
+    }
+
+    return 0;
 }
 
 int
 main(int argc, char *argv[])
 {
-    MPI_Init(&argc, &argv);
-
-    int world_size;
-    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-
-    int my_rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
-
     if (argc < 2 || argc > 3) {
         cerr << "Usage: " << argv[0] << " <password> [maximum length]" << endl;
         return 1;
@@ -330,21 +323,15 @@ main(int argc, char *argv[])
     }
 
     auto start = chrono::high_resolution_clock::now();
-    if (my_rank == 0) {
-        find_pwd(pwd, max_len);
-    } else {
-        brute_force(pwd, max_len, my_rank);
+    if (!find_pwd(pwd, max_len)) {
+        cout << "Nice password, couldn't crack it!" << endl;
     }
-
-    cout << "Rank " << my_rank << ": could not find the password." << endl; 
 
     auto end = chrono::high_resolution_clock::now();
     double time_taken =
         chrono::duration_cast<chrono::nanoseconds>(end - start).count() * 1e-9;
 
-    cout << "Rank " << my_rank << ": password lookup completed in "
-        << time_taken << " seconds." << endl;
+    cout << "Password lookup completed in " << time_taken << " seconds." << endl;
 
-    MPI_Finalize();
     return 0;
 }
