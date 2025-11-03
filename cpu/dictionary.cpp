@@ -8,11 +8,11 @@
 
 using namespace std;
 
-#define DICTIONARY "rockyou.txt"
+#define DICTIONARY "../rockyou.txt"
 #define NUM_PASSWORDS 14344391 /* the number of lines in the rockyou dataset */
 #define TERMINAL_WIDTH 80      /* used for progress bar, assume default width */
 
-unordered_set<string> tried_pwds; /* used for memoization */
+/* unordered_set<string> tried_pwds; */ /* used for memoization */
 
 /*
  * tries to find the correct pwd by pre/appending numbers to the base 
@@ -43,8 +43,9 @@ find_pwd_add_int(const string start, const int max_len, const string pwd)
 
             prepend += start;
             append += to_string(j);
-
+ 
             /* memoize! */
+            /*
             if (tried_pwds.find(prepend) != tried_pwds.end()) {
                 return 0;
             } else {
@@ -56,6 +57,7 @@ find_pwd_add_int(const string start, const int max_len, const string pwd)
             } else {
                 tried_pwds.insert(append);
             }
+            */
 
             if (find_pwd_add_int(append, max_len, pwd)
                 || find_pwd_add_int(prepend, max_len, pwd)) {
@@ -108,8 +110,13 @@ find_pwd_remove(const string start, const string pwd)
  *  - 1: pwd found
  */
 int
-find_pwd_casing(const string start, const string end, const string pwd)
+find_pwd_casing(const string start, const string end, const string pwd, unordered_set<string>& visited)
 {
+    if (visited.count(start)) {
+        return 0;
+    }
+    visited.insert(start);
+
     size_t len = start.length();
 
     if (start == pwd) {
@@ -140,13 +147,15 @@ find_pwd_casing(const string start, const string end, const string pwd)
         }
 
         /* memoize! */
+        /*
         if (tried_pwds.find(new_pwd) != tried_pwds.end()) {
             return 0;
         } else {
             tried_pwds.insert(new_pwd);
         }
-        
-        if (find_pwd_casing(new_pwd, end, pwd)) {
+        */
+
+        if (find_pwd_casing(new_pwd, end, pwd, visited)) {
             return 1;
         }
     }
@@ -185,7 +194,7 @@ find_pwd_repeat(const string start, const int max_len, const string pwd)
         return 0;
     }
 
-    string repeated = pwd + pwd;
+    string repeated = start + start;
     if (repeated == pwd) {
         return 1;
     }
@@ -252,7 +261,7 @@ find_pwd(const string pwd, const int max_len)
             return 1;
         }
 
-        tried_pwds.clear(); /* reset after every entry */
+        /* tried_pwds.clear(); */ /* reset after every entry */
 
         if (find_pwd_reverse(curr_pass, pwd)) {
             cout << endl << "Found the password by reversing '"
@@ -270,9 +279,10 @@ find_pwd(const string pwd, const int max_len)
         transform(curr_pass.begin(), curr_pass.end(), lower.begin(), ::tolower);
         string upper = curr_pass;
         transform(curr_pass.begin(), curr_pass.end(), upper.begin(), ::toupper);
-        
+        unordered_set<string> visited;
+
         if (lowered_pwds.find(lower) == lowered_pwds.end()) {
-            if (find_pwd_casing(lower, upper, pwd)) {
+            if (find_pwd_casing(lower, upper, pwd, visited)) {
                 cout << endl << "Found the password by changing casing on '"
                     << curr_pass << "'." << endl;
                 return 1;
@@ -281,7 +291,7 @@ find_pwd(const string pwd, const int max_len)
         }
 
 
-        tried_pwds.clear(); /* reset after every entry */
+        /* tried_pwds.clear(); */ /* reset after every entry */
 
         if (find_pwd_remove(curr_pass, pwd)) {
             cout << endl << "Found the password by removing characters from '"

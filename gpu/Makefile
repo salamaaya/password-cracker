@@ -1,9 +1,16 @@
-CXX      = mpic++
-CXX_FILE = $(wildcard *.cpp)
-TARGET   = $(patsubst %.cpp,%,$(CXX_FILE))
-CXXFLAGS = -g -std=c++11 -Wall -Werror -pedantic-errors -fmessage-length=0
+# Simple Makefile for CUDA + MPI
+TARGET = dictionary
+SRC = dictionary.cu
 
-all:
-	$(CXX) $(CXXFLAGS) $(CXX_FILE) -o $(TARGET)
+# Compile flags
+NVCC = nvcc
+MPICXX = mpicxx
+NVCC_FLAGS = -O3 -std=c++17 -allow-unsupported-compiler
+
+# Default rule
+$(TARGET): $(SRC)
+	$(NVCC) $(NVCC_FLAGS) -ccbin $(MPICXX) -o $@ $<
+
 clean:
-	rm -f $(TARGET) $(TARGET).exe
+	rm -f $(TARGET)
+

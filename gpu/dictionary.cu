@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <cuda.h>
+#include <cuda_runtime.h>
 #include <chrono>
 #include <iostream>
 #include <fstream>
@@ -9,63 +11,74 @@
 
 using namespace std;
 
-#define DICTIONARY "rockyou.txt"
+#define DICTIONARY "../rockyou.txt"
 #define NUM_PASSWORDS 14344391 /* the number of lines in the rockyou dataset */
 #define TERMINAL_WIDTH 80      /* used for progress bar, assume default width */
 
-unordered_set<string> tried_pwds; /* used for memoization */
+__device__ int my_strlen(const char* s) {
+    int len = 0;
+    while (s[len] != '\0') len++;
+    return len;
+}
 
-/*
- * tries to find the correct pwd by pre/appending numbers to the base 
- * password (start)
- * return values:
- *  - 0: pwd was NOT found
- *  - 1: pwd found
- */
-int
-find_pwd_add_int(const string start, const int max_len, const string pwd)
+__device__ int my_strcmp(const char* a, const char* b) {
+    int i = 0;
+    while (a[i] == b[i]) {
+        if (a[i] == '\0') return 0;
+        i++;
+    }
+    return (unsigned char)a[i] - (unsigned char)b[i];
+}
+
+__device__ void my_itoa(int num, char* str) {
+    int i = 0;
+    if (num == 0) {
+        str[i++] = '0';
+        str[i] = '\0';
+        return;
+    }
+    char buf[16];
+    while (num > 0) {
+        buf[i++] = (num % 10) + '0';
+        num /= 10;
+    }
+    // reverse
+    for (int j = 0; j < i; j++)
+        str[j] = buf[i - j - 1];
+    str[i] = '\0';
+}
+
+__global__ void find_add_int_kernel(const char* start, int max_len,
+                                   const char* pwd, int* found)
 {
-    size_t len = start.length();
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (start == pwd) {
-        cout << endl
-             << "Your password is: " << start << endl;
-        return 1;
+    char num_str[16];
+    my_itoa(tid, num_str);
+
+    char combo[256];
+    int n = 0;
+
+    /* prepend num + start */
+    for (int i = 0; num_str[i]; i++) combo[n++] = num_str[i];
+    for (int i = 0; start[i]; i++) combo[n++] = start[i];
+    combo[n] = '\0';
+
+    if (my_strcmp(combo, pwd) == 0) {
+        atomicExch(found, 1);
+        return;
     }
 
-    if ((int)len >= max_len) {
-        return 0;
+    /* append start + num */
+    n = 0;
+    for (int i = 0; start[i]; i++) combo[n++] = start[i];
+    for (int i = 0; num_str[i]; i++) combo[n++] = num_str[i];
+    combo[n] = '\0';
+
+    if (my_strcmp(combo, pwd) == 0) {
+        atomicExch(found, 1);
+        return;
     }
-
-    for (size_t i = 0; i < len; i++) {
-        for (int j = 0; j < 10; j++) {
-            string prepend = to_string(j);
-            string append = start;
-
-            prepend += start;
-            append += to_string(j);
-
-            /* memoize! */
-            if (tried_pwds.find(prepend) != tried_pwds.end()) {
-                return 0;
-            } else {
-                tried_pwds.insert(prepend);
-            }
-
-            if (tried_pwds.find(append) != tried_pwds.end()) {
-                return 0;
-            } else {
-                tried_pwds.insert(append);
-            }
-
-            if (find_pwd_add_int(append, max_len, pwd)
-                || find_pwd_add_int(prepend, max_len, pwd)) {
-                    return 1;
-            }
-        }
-    }
-
-    return 0;
 }
 
 /*
@@ -109,8 +122,14 @@ find_pwd_remove(const string start, const string pwd)
  *  - 1: pwd found
  */
 int
-find_pwd_casing(const string start, const string end, const string pwd)
+find_pwd_casing(const string start, const string end, const string pwd, unordered_set<string>& visited)
 {
+    if (visited.count(start)) {
+        return 0;
+    }
+
+    visited.insert(start);
+
     size_t len = start.length();
 
     if (start == pwd) {
@@ -139,15 +158,8 @@ find_pwd_casing(const string start, const string end, const string pwd)
         if (i < len - 1) {
             new_pwd += start.substr(i + 1, len - i - 1);
         }
-
-        /* memoize! */
-        if (tried_pwds.find(new_pwd) != tried_pwds.end()) {
-            return 0;
-        } else {
-            tried_pwds.insert(new_pwd);
-        }
         
-        if (find_pwd_casing(new_pwd, end, pwd)) {
+        if (find_pwd_casing(new_pwd, end, pwd, visited)) {
             return 1;
         }
     }
@@ -186,7 +198,7 @@ find_pwd_repeat(const string start, const int max_len, const string pwd)
         return 0;
     }
 
-    string repeated = pwd + pwd;
+    string repeated = start + start;
     if (repeated == pwd) {
         return 1;
     }
@@ -212,19 +224,41 @@ void
 brute_force(const string pwd, const int max_len, int rank) {
     cout << "Rank " << rank << ": starting a brute force attack..." << endl;
 
-    unordered_set<string> lowered_pwds; /* used to void repeating casing */
     ifstream common_pwd(DICTIONARY);
     string curr_pass;
 
     while (common_pwd >> curr_pass) {
         if (rank == 1) {
-            if (find_pwd_add_int(curr_pass, max_len, pwd)) {
+            int threads_per_block = 256;
+            int num_blocks = (100000 + threads_per_block - 1) / threads_per_block;
+
+            char* d_pwd;
+            char* d_start;
+            int* d_found;
+            int h_found = 0;
+
+            cudaMalloc((void**)&d_pwd, pwd.length() + 1);
+            cudaMalloc((void**)&d_start, curr_pass.length() + 1);
+            cudaMalloc((void**)&d_found, sizeof(int));
+
+            cudaMemcpy(d_pwd, pwd.c_str(), pwd.length() + 1, cudaMemcpyHostToDevice);
+            cudaMemcpy(d_found, &h_found, sizeof(int), cudaMemcpyHostToDevice);
+            cudaMemcpy(d_start, curr_pass.c_str(), curr_pass.length() + 1, cudaMemcpyHostToDevice);
+
+            find_add_int_kernel<<<num_blocks, threads_per_block>>>(d_start, max_len, d_pwd, d_found);
+
+            cudaMemcpy(&h_found, d_found, sizeof(int), cudaMemcpyDeviceToHost);
+            if (h_found) {
                 cout << endl
                     << "Rank 1 found the password by adding numbers to '"
                     << curr_pass << "'." << endl;
+                cudaFree(d_pwd);
+                cudaFree(d_found);
                 MPI_Abort(MPI_COMM_WORLD, 0);
             }
-            tried_pwds.clear(); /* reset after every entry */
+
+            cudaFree(d_pwd);
+            cudaFree(d_found);
         } else if (rank == 2) {
             if (find_pwd_reverse(curr_pass, pwd)) {
                 cout << endl
@@ -240,22 +274,18 @@ brute_force(const string pwd, const int max_len, int rank) {
                 MPI_Abort(MPI_COMM_WORLD, 0);
             }
         } else if (rank == 4) {
+            unordered_set<string> visited;
             string lower = curr_pass;
             transform(curr_pass.begin(), curr_pass.end(), lower.begin(), ::tolower);
             string upper = curr_pass;
             transform(curr_pass.begin(), curr_pass.end(), upper.begin(), ::toupper);
             
-            if (lowered_pwds.find(lower) == lowered_pwds.end()) {
-                if (find_pwd_casing(lower, upper, pwd)) {
-                    cout << endl 
-                        << "Rank 4 found the password by changing casing on '"
-                        << curr_pass << "'." << endl;
-                    MPI_Abort(MPI_COMM_WORLD, 0);
-                }
-                lowered_pwds.insert(lower);
+            if (find_pwd_casing(lower, upper, pwd, visited)) {
+                cout << endl 
+                    << "Rank 4 found the password by changing casing on '"
+                    << curr_pass << "'." << endl;
+                MPI_Abort(MPI_COMM_WORLD, 0);
             }
-
-            tried_pwds.clear(); /* reset after every entry */
         } else if (find_pwd_remove(curr_pass, pwd)) {
             cout << endl
                 << "Rank 5 found the password by removing characters from '"
@@ -348,3 +378,4 @@ main(int argc, char *argv[])
     MPI_Finalize();
     return 0;
 }
+
