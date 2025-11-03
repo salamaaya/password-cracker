@@ -17,7 +17,7 @@ Once you've installed the rockyou dataset, run the following in the project's ro
 gunzip rockyou.txt.gz
 ```
 
-### Usage
+### CPU Usage
 
 ```
 ./dictioanry <password> [maximum length]
@@ -25,13 +25,32 @@ gunzip rockyou.txt.gz
 
 To create an executable, run:
 ```
+cd cpu
 make
 ```
 
 Examples:
 ```
-./dictionary password1234 28
+./dictionary password1234 8
 ./dictionary strongpassword
+```
+
+### GPU Usage
+
+```
+mpiexec -np 6 ./dictioanry <password> [maximum length]
+```
+
+To create an executable, run:
+```
+cd gpu
+make
+```
+
+Examples:
+```
+mpiexec -np 6 ./dictionary password1234 28
+mpiexec -np 6 ./dictionary strongpassword
 ```
 
 Note: If the maximum is not set, the default will be set to 128
