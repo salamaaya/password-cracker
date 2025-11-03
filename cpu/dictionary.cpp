@@ -22,8 +22,13 @@ using namespace std;
  *  - 1: pwd found
  */
 int
-find_pwd_add_int(const string start, const int max_len, const string pwd)
+find_pwd_add_int(const string start, const int max_len, const string pwd, unordered_set<string>& visited)
 {
+    if (visited.count(start)) {
+        return 0;
+    }
+    visited.insert(start);
+
     size_t len = start.length();
 
     if (start == pwd) {
@@ -59,8 +64,8 @@ find_pwd_add_int(const string start, const int max_len, const string pwd)
             }
             */
 
-            if (find_pwd_add_int(append, max_len, pwd)
-                || find_pwd_add_int(prepend, max_len, pwd)) {
+            if (find_pwd_add_int(append, max_len, pwd, visited)
+                || find_pwd_add_int(prepend, max_len, pwd, visited)) {
                     return 1;
             }
         }
@@ -77,24 +82,31 @@ find_pwd_add_int(const string start, const int max_len, const string pwd)
  *  - 1: pwd found
  */
 int
-find_pwd_remove(const string start, const string pwd)
+find_pwd_remove(const string start, const string pwd,
+                unordered_set<string>& visited,
+                int removed, int max_removals)
 {
-    size_t len = start.length();
+    if (visited.count(start)) {
+        return 0;
+    }
+    visited.insert(start);
 
     if (start == pwd) {
         cout << endl << "Your password is: " << start << endl;
         return 1;
     }
 
-    if (start == "") {
+    // Stop if we've removed too many characters or the string is empty
+    if (removed >= max_removals || start.empty()) {
         return 0;
     }
 
+    size_t len = start.length();
     for (size_t i = 0; i < len; i++) {
         string new_pwd = start;
         new_pwd.erase(i, 1);
 
-        if (find_pwd_remove(new_pwd, pwd)) {
+        if (find_pwd_remove(new_pwd, pwd, visited, removed + 1, max_removals)) {
             return 1;
         }
     }
@@ -254,46 +266,48 @@ find_pwd(const string pwd, const int max_len)
     unordered_set<string> lowered_pwds; /* used to void repeating casing */
 
     while (common_pwd >> curr_pass) {
-        /* each if statement will be assigned to a node */
-        if (find_pwd_add_int(curr_pass, max_len, pwd)) {
-            cout << endl << "Found the password by adding numbers to '" 
-                 << curr_pass << "'." << endl;
-            return 1;
-        }
+        if (curr_pass.length() <= max_len) {
+            /* each if statement will be assigned to a node */
+            unordered_set<string> visited;
+            if (find_pwd_add_int(curr_pass, max_len, pwd, visited)) {
+                cout << endl << "Found the password by adding numbers to '" 
+                     << curr_pass << "'." << endl;
+                return 1;
+            }
 
-        /* tried_pwds.clear(); */ /* reset after every entry */
+            /* tried_pwds.clear(); */ /* reset after every entry */
 
-        if (find_pwd_reverse(curr_pass, pwd)) {
-            cout << endl << "Found the password by reversing '"
-                 << curr_pass << "'." << endl;
-            return 1;
-        }
+            if (find_pwd_reverse(curr_pass, pwd)) {
+                cout << endl << "Found the password by reversing '"
+                     << curr_pass << "'." << endl;
+                return 1;
+            }
 
-        if (find_pwd_repeat(curr_pass, max_len, pwd)) {
-            cout << endl << "Found the password by repeating '"
-                << curr_pass << "'." << endl;
-            return 1;
-        }
-
-        string lower = curr_pass;
-        transform(curr_pass.begin(), curr_pass.end(), lower.begin(), ::tolower);
-        string upper = curr_pass;
-        transform(curr_pass.begin(), curr_pass.end(), upper.begin(), ::toupper);
-        unordered_set<string> visited;
-
-        if (lowered_pwds.find(lower) == lowered_pwds.end()) {
-            if (find_pwd_casing(lower, upper, pwd, visited)) {
-                cout << endl << "Found the password by changing casing on '"
+            if (find_pwd_repeat(curr_pass, max_len, pwd)) {
+                cout << endl << "Found the password by repeating '"
                     << curr_pass << "'." << endl;
                 return 1;
             }
-            lowered_pwds.insert(lower);
+
+            string lower = curr_pass;
+            transform(curr_pass.begin(), curr_pass.end(), lower.begin(), ::tolower);
+            string upper = curr_pass;
+            transform(curr_pass.begin(), curr_pass.end(), upper.begin(), ::toupper);
+            visited.clear();
+
+            if (lowered_pwds.find(lower) == lowered_pwds.end()) {
+                if (find_pwd_casing(lower, upper, pwd, visited)) {
+                    cout << endl << "Found the password by changing casing on '"
+                        << curr_pass << "'." << endl;
+                    return 1;
+                }
+                lowered_pwds.insert(lower);
+            }
         }
 
-
         /* tried_pwds.clear(); */ /* reset after every entry */
-
-        if (find_pwd_remove(curr_pass, pwd)) {
+        unordered_set<string> visited;
+        if (find_pwd_remove(curr_pass, pwd, visited, 0, 0)) {
             cout << endl << "Found the password by removing characters from '"
                 << curr_pass << "'." << endl;
             return 1;

@@ -11,9 +11,10 @@
 
 using namespace std;
 
-#define DICTIONARY "../rockyou.txt"
+#define DICTIONARY "rockyou.txt"
 #define NUM_PASSWORDS 14344391 /* the number of lines in the rockyou dataset */
 #define TERMINAL_WIDTH 80      /* used for progress bar, assume default width */
+#include <cuda_runtime.h>
 
 __device__ int my_strlen(const char* s) {
     int len = 0;
@@ -52,6 +53,7 @@ __global__ void find_add_int_kernel(const char* start, int max_len,
                                    const char* pwd, int* found)
 {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= 100000000) return; // safety limit
 
     char num_str[16];
     my_itoa(tid, num_str);
@@ -59,7 +61,7 @@ __global__ void find_add_int_kernel(const char* start, int max_len,
     char combo[256];
     int n = 0;
 
-    /* prepend num + start */
+    // prepend num + start
     for (int i = 0; num_str[i]; i++) combo[n++] = num_str[i];
     for (int i = 0; start[i]; i++) combo[n++] = start[i];
     combo[n] = '\0';
@@ -69,7 +71,7 @@ __global__ void find_add_int_kernel(const char* start, int max_len,
         return;
     }
 
-    /* append start + num */
+    // append start + num
     n = 0;
     for (int i = 0; start[i]; i++) combo[n++] = start[i];
     for (int i = 0; num_str[i]; i++) combo[n++] = num_str[i];
@@ -89,24 +91,31 @@ __global__ void find_add_int_kernel(const char* start, int max_len,
  *  - 1: pwd found
  */
 int
-find_pwd_remove(const string start, const string pwd)
+find_pwd_remove(const string start, const string pwd,
+                unordered_set<string>& visited,
+                int removed, int max_removals)
 {
-    size_t len = start.length();
+    if (visited.count(start)) {
+        return 0;
+    }
+    visited.insert(start);
 
     if (start == pwd) {
         cout << endl << "Your password is: " << start << endl;
         return 1;
     }
 
-    if (start == "") {
+    // Stop if we've removed too many characters or the string is empty
+    if (removed >= max_removals || start.empty()) {
         return 0;
     }
 
+    size_t len = start.length();
     for (size_t i = 0; i < len; i++) {
         string new_pwd = start;
         new_pwd.erase(i, 1);
 
-        if (find_pwd_remove(new_pwd, pwd)) {
+        if (find_pwd_remove(new_pwd, pwd, visited, removed + 1, max_removals)) {
             return 1;
         }
     }
@@ -229,42 +238,46 @@ brute_force(const string pwd, const int max_len, int rank) {
 
     while (common_pwd >> curr_pass) {
         if (rank == 1) {
-            int threads_per_block = 256;
-            int num_blocks = (100000 + threads_per_block - 1) / threads_per_block;
+            if (curr_pass.length() < max_len) {
+                int threads_per_block = 256;
+                int num_blocks = (100000 + threads_per_block - 1) / threads_per_block;
 
-            char* d_pwd;
-            char* d_start;
-            int* d_found;
-            int h_found = 0;
+                char* d_pwd;
+                char* d_start;
+                int* d_found;
+                int h_found = 0;
 
-            cudaMalloc((void**)&d_pwd, pwd.length() + 1);
-            cudaMalloc((void**)&d_start, curr_pass.length() + 1);
-            cudaMalloc((void**)&d_found, sizeof(int));
+                cudaMalloc((void**)&d_pwd, pwd.length() + 1);
+                cudaMalloc((void**)&d_start, curr_pass.length() + 1);
+                cudaMalloc((void**)&d_found, sizeof(int));
 
-            cudaMemcpy(d_pwd, pwd.c_str(), pwd.length() + 1, cudaMemcpyHostToDevice);
-            cudaMemcpy(d_found, &h_found, sizeof(int), cudaMemcpyHostToDevice);
-            cudaMemcpy(d_start, curr_pass.c_str(), curr_pass.length() + 1, cudaMemcpyHostToDevice);
+                cudaMemcpy(d_pwd, pwd.c_str(), pwd.length() + 1, cudaMemcpyHostToDevice);
+                cudaMemcpy(d_found, &h_found, sizeof(int), cudaMemcpyHostToDevice);
+                cudaMemcpy(d_start, curr_pass.c_str(), curr_pass.length() + 1, cudaMemcpyHostToDevice);
 
-            find_add_int_kernel<<<num_blocks, threads_per_block>>>(d_start, max_len, d_pwd, d_found);
+                find_add_int_kernel<<<num_blocks, threads_per_block>>>(d_start, max_len, d_pwd, d_found);
 
-            cudaMemcpy(&h_found, d_found, sizeof(int), cudaMemcpyDeviceToHost);
-            if (h_found) {
-                cout << endl
-                    << "Rank 1 found the password by adding numbers to '"
-                    << curr_pass << "'." << endl;
+                cudaMemcpy(&h_found, d_found, sizeof(int), cudaMemcpyDeviceToHost);
+                if (h_found) {
+                    cout << endl
+                        << "Rank 1 found the password by adding numbers to '"
+                        << curr_pass << "'." << endl;
+                    cudaFree(d_pwd);
+                    cudaFree(d_found);
+                    MPI_Abort(MPI_COMM_WORLD, 4);
+                }
+
                 cudaFree(d_pwd);
                 cudaFree(d_found);
-                MPI_Abort(MPI_COMM_WORLD, 0);
             }
-
-            cudaFree(d_pwd);
-            cudaFree(d_found);
         } else if (rank == 2) {
-            if (find_pwd_reverse(curr_pass, pwd)) {
-                cout << endl
-                    << "Rank 2 found the password by reversing '"
-                    << curr_pass << "'." << endl;
-                MPI_Abort(MPI_COMM_WORLD, 0);
+            if (curr_pass.length() <= max_len) {
+                if (find_pwd_reverse(curr_pass, pwd)) {
+                    cout << endl
+                        << "Rank 2 found the password by reversing '"
+                        << curr_pass << "'." << endl;
+                    MPI_Abort(MPI_COMM_WORLD, 0);
+                }
             }
         } else if (rank == 3) {
             if (find_pwd_repeat(curr_pass, max_len, pwd)) {
@@ -274,23 +287,28 @@ brute_force(const string pwd, const int max_len, int rank) {
                 MPI_Abort(MPI_COMM_WORLD, 0);
             }
         } else if (rank == 4) {
+            if (curr_pass.length() <= max_len) {
+                unordered_set<string> visited;
+                string lower = curr_pass;
+                transform(curr_pass.begin(), curr_pass.end(), lower.begin(), ::tolower);
+                string upper = curr_pass;
+                transform(curr_pass.begin(), curr_pass.end(), upper.begin(), ::toupper);
+                
+                if (find_pwd_casing(lower, upper, pwd, visited)) {
+                    cout << endl 
+                        << "Rank 4 found the password by changing casing on '"
+                        << curr_pass << "'." << endl;
+                    MPI_Abort(MPI_COMM_WORLD, 0);
+                }
+            }
+        } else if (rank == 5) {
             unordered_set<string> visited;
-            string lower = curr_pass;
-            transform(curr_pass.begin(), curr_pass.end(), lower.begin(), ::tolower);
-            string upper = curr_pass;
-            transform(curr_pass.begin(), curr_pass.end(), upper.begin(), ::toupper);
-            
-            if (find_pwd_casing(lower, upper, pwd, visited)) {
-                cout << endl 
-                    << "Rank 4 found the password by changing casing on '"
+            if (find_pwd_remove(curr_pass, pwd, visited, 0, 4)) {
+                cout << endl
+                    << "Rank 5 found the password by removing characters from '"
                     << curr_pass << "'." << endl;
                 MPI_Abort(MPI_COMM_WORLD, 0);
             }
-        } else if (find_pwd_remove(curr_pass, pwd)) {
-            cout << endl
-                << "Rank 5 found the password by removing characters from '"
-                << curr_pass << "'." << endl;
-            MPI_Abort(MPI_COMM_WORLD, 0);
         }
     }
 }
