@@ -43,6 +43,8 @@ mpiexec -np 6 ./dictioanry <password> [maximum length]
 
 To create an executable, run:
 ```
+module load openmpi/gcc/64/4.1.5
+module load cuda12.4
 cd gpu
 make
 ```
